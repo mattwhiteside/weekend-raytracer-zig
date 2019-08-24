@@ -8,6 +8,7 @@ const ArrayList = std.ArrayList;
 const rand = std.rand;
 const Ray = @import("ray.zig").Ray;
 const Vec3f = @import("vector.zig").Vec3f;
+const Thread = std.Thread;
 
 const Sphere = hitable.Sphere;
 const World = hitable.World;
@@ -229,21 +230,37 @@ pub fn main() !void {
     {
         _ = c.SDL_LockSurface(surface);
 
-        var tasks = ArrayList(*os.Thread).init(std.debug.global_allocator);
+        var tasks = ArrayList(Thread).init(std.debug.global_allocator);
         defer tasks.deinit();
         var contexts = ArrayList(ThreadContext).init(std.debug.global_allocator);
         defer contexts.deinit();
 
-        const chunk_size = blk: {
-            const num_pixels = window_width * window_height;
-            const n = num_pixels / num_threads;
-            const rem = num_pixels % num_threads;
-            if (rem > 0) {
-                break :blk n + 1;
-            } else {
-                break :blk n;
-            }
-        };
+        var _chunk_size: i32 = 0;
+
+        //do this in the simpler way (below) to workaround 
+        //an apparent bug in the current version of the compiler (Aug. 2019 version)
+
+        // const chunk_size = blk: {
+        //     const num_pixels = window_width * window_height;
+        //     const n = num_pixels / num_threads;
+        //     const rem = num_pixels % num_threads;
+        //     if (rem > 0) {
+        //         break :blk n + 1;
+        //     } else {
+        //         break :blk n;
+        //     }
+        // };
+
+        const num_pixels = window_width * window_height;
+        const n = num_pixels / num_threads;
+        const rem = num_pixels % num_threads;
+        if (rem > 0) {
+            _chunk_size = n + 1;
+        } else {
+            _chunk_size = n;
+        }
+
+        const chunk_size = _chunk_size;
 
         {
             var ithread: i32 = 0;
@@ -257,8 +274,8 @@ pub fn main() !void {
                     .world = &world,
                     .camera = &camera,
                 });
-                const thread = try os.spawnThread(&contexts.toSlice()[@intCast(usize, ithread)], renderFn);
-                try tasks.append(thread);
+                const thread = try Thread.spawn(&contexts.toSlice()[@intCast(usize, ithread)], renderFn);
+                try tasks.append(thread.*);
             }
         }
 
