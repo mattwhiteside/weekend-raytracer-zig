@@ -12,8 +12,11 @@ pub fn build(b: *Builder) void {
     b.installArtifact(exe);
     if (exe.target.isDarwin()) {
         exe.addIncludeDir("/usr/local/Cellar/sdl2/2.0.9_1/include/SDL2");
-        exe.linkSystemLibrary("SDL2");
+    } else {
+        //assuming this means linux
+        exe.addIncludeDir("/usr/include/SDL2");
     }
+    exe.linkSystemLibrary("SDL2");
 
     const run = b.step("run", "Run the project");
     const run_cmd = exe.run();

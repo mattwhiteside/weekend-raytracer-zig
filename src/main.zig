@@ -133,11 +133,20 @@ const ThreadContext = struct {
     surface: *c.SDL_Surface,
     world: *const World,
     camera: *const Camera,
+    done: bool = false
 };
 
-fn renderFn(context: *ThreadContext) void {
+var frames = [_] anyframe{undefined} ** num_threads;
+
+pub fn render(context: *ThreadContext) void {
     const start_index = context.thread_index * context.chunk_size;
-    const end_index = if (start_index + context.chunk_size <= context.num_pixels) start_index + context.chunk_size else context.num_pixels;
+    const candidate_end_index = start_index + context.chunk_size; 
+    var end_index:i32 = 0;
+    if (candidate_end_index <= context.num_pixels) {
+        end_index = candidate_end_index;
+    } else {
+        end_index = context.num_pixels;
+    }
 
     var idx: i32 = start_index;
     while (idx < end_index) : (idx += 1) {
@@ -145,23 +154,31 @@ fn renderFn(context: *ThreadContext) void {
         const h = @divTrunc(idx, window_width);
         var sample: i32 = 0;
         var color_accum = Vec3f.zero();
+        suspend {
+            while (sample < num_samples) : (sample += 1) {
+                const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
+                const u = (@intToFloat(f32, w) + context.rng.random.float(f32)) / @intToFloat(f32, window_width);
 
-        while (sample < num_samples) : (sample += 1) {
-            const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
-            const u = (@intToFloat(f32, w) + context.rng.random.float(f32)) / @intToFloat(f32, window_width);
-
-            const r = context.camera.makeRay(&context.rng.random, u, v);
-            const color_sample = color(r, context.world, &context.rng.random, 0);
-            // const color_sample = colorScattering(r, &world, &prng.random);
-            // const color_sample = colorDepth(r, &world, &prng.random);
-            // const color_sample = colorNormal(r, &world);
-            // const color_sample = colorAlbedo(r, &world);
-            color_accum = color_accum.add(color_sample);
+                const r = context.camera.makeRay(&context.rng.random, u, v);
+                const color_sample = color(r, context.world, &context.rng.random, 0);
+                // const color_sample = colorScattering(r, &world, &prng.random);
+                // const color_sample = colorDepth(r, &world, &prng.random);
+                // const color_sample = colorNormal(r, &world);
+                // const color_sample = colorAlbedo(r, &world);
+                color_accum = color_accum.add(color_sample);
+            }
+            color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
+            setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
+            frames[@intCast(usize, context.thread_index)] = @frame();
+            if (idx == end_index - 1){
+                context.done = true;
+            }
         }
-        color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
-        setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
     }
 }
+
+var contexts = ArrayList(ThreadContext).init(std.debug.global_allocator);
+
 
 pub fn main() !void {
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
@@ -232,7 +249,6 @@ pub fn main() !void {
 
         var tasks = ArrayList(Thread).init(std.debug.global_allocator);
         defer tasks.deinit();
-        var contexts = ArrayList(ThreadContext).init(std.debug.global_allocator);
         defer contexts.deinit();
 
         var _chunk_size: i32 = 0;
@@ -262,25 +278,38 @@ pub fn main() !void {
 
         const chunk_size = _chunk_size;
 
-        {
-            var ithread: i32 = 0;
-            while (ithread < num_threads) : (ithread += 1) {
-                try contexts.append(ThreadContext{
-                    .thread_index = ithread,
-                    .num_pixels = window_width * window_height,
-                    .chunk_size = chunk_size,
-                    .rng = rand.DefaultPrng.init(@intCast(u64, ithread)),
-                    .surface = surface,
-                    .world = &world,
-                    .camera = &camera,
-                });
-                const thread = try Thread.spawn(&contexts.toSlice()[@intCast(usize, ithread)], renderFn);
-                try tasks.append(thread.*);
-            }
+        var ithread: i32 = 0;
+        while (ithread < num_threads) : (ithread += 1) {
+            try contexts.append(ThreadContext{
+                .thread_index = ithread,
+                .num_pixels = window_width * window_height,
+                .chunk_size = chunk_size,
+                .rng = rand.DefaultPrng.init(@intCast(u64, ithread)),
+                .surface = surface,
+                .world = &world,
+                .camera = &camera,
+            });
+            //const thread = try Thread.spawn(&contexts.toSlice()[@intCast(usize, ithread)], render);
+            const frame = async render(&contexts.toSlice()[@intCast(usize, ithread)]);
+
+            const ptr: anyframe = @ptrCast(anyframe, &frame);
+            frames[@intCast(usize,ithread)] = ptr;
+            //_ = try frames.append(renderFn);
+            //try tasks.append(thread.*);
         }
 
-        for (tasks.toSlice()) |task| {
-            task.wait();
+
+        while (true){
+            var all_done = true;
+            for (frames) |frame, j| {
+                if (!contexts.toSlice()[j].done){
+                    all_done = false;
+                    resume frame;
+                }
+            }
+            if (all_done){
+                break;
+            }
         }
 
         c.SDL_UnlockSurface(surface);
