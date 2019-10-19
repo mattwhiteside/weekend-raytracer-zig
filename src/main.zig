@@ -136,9 +136,19 @@ const ThreadContext = struct {
     done: bool = false
 };
 
-var frames = [_] anyframe{undefined} ** num_threads;
+var frames = [_] @Frame(render){undefined} ** num_threads;
 
-pub fn render(context: *ThreadContext) void {
+pub fn render(context: *ThreadContext) !void {
+
+    const stdout_file = try std.io.getStdOut();
+
+    // Get the `FileOutStream` corresponding to stdout.
+    var stdout_stream = stdout_file.outStream();
+
+    // Bind the generic `OutStream` field of `FileOutStream` which contains
+    // all the formatted output functions.
+    var stdout = &stdout_stream.stream;
+
     const start_index = context.thread_index * context.chunk_size;
     const candidate_end_index = start_index + context.chunk_size; 
     var end_index:i32 = 0;
@@ -155,7 +165,9 @@ pub fn render(context: *ThreadContext) void {
         var sample: i32 = 0;
         var color_accum = Vec3f.zero();
         suspend {
+            //try stdout.print("hey pal, at top: frame = {}, idx = {}, sample = {}\n", context.thread_index, idx, sample);
             while (sample < num_samples) : (sample += 1) {
+                //try stdout.print("hey pal: frame = {}, idx = {}, sample = {}\n", context.thread_index, idx, sample);
                 const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
                 const u = (@intToFloat(f32, w) + context.rng.random.float(f32)) / @intToFloat(f32, window_width);
 
@@ -169,7 +181,6 @@ pub fn render(context: *ThreadContext) void {
             }
             color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
             setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
-            frames[@intCast(usize, context.thread_index)] = @frame();
             if (idx == end_index - 1){
                 context.done = true;
             }
@@ -181,6 +192,16 @@ var contexts = ArrayList(ThreadContext).init(std.debug.global_allocator);
 
 
 pub fn main() !void {
+
+    const stdout_file = try std.io.getStdOut();
+
+    // Get the `FileOutStream` corresponding to stdout.
+    var stdout_stream = stdout_file.outStream();
+
+    // Bind the generic `OutStream` field of `FileOutStream` which contains
+    // all the formatted output functions.
+    var stdout = &stdout_stream.stream;
+
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         c.SDL_Log(c"Unable to initialize SDL: %s", c.SDL_GetError());
         return error.SDLInitializationFailed;
@@ -289,13 +310,10 @@ pub fn main() !void {
                 .world = &world,
                 .camera = &camera,
             });
-            //const thread = try Thread.spawn(&contexts.toSlice()[@intCast(usize, ithread)], render);
             const frame = async render(&contexts.toSlice()[@intCast(usize, ithread)]);
 
             const ptr: anyframe = @ptrCast(anyframe, &frame);
-            frames[@intCast(usize,ithread)] = ptr;
-            //_ = try frames.append(renderFn);
-            //try tasks.append(thread.*);
+            frames[@intCast(usize,ithread)] = frame;
         }
 
 
@@ -304,7 +322,12 @@ pub fn main() !void {
             for (frames) |frame, j| {
                 if (!contexts.toSlice()[j].done){
                     all_done = false;
-                    resume frame;
+                    const framePtr: anyframe = @ptrCast(anyframe, &frame);
+                    resume framePtr;
+                }
+                else {
+                    try stdout.print("Frame {} is finished\n", j);
+                    continue;
                 }
             }
             if (all_done){
