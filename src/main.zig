@@ -23,10 +23,13 @@ const c = @cImport({
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED_MASK    0x1FFF0000u
 const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
 
-const window_width: c_int = 640;
-const window_height: c_int = 320;
+// const window_width: c_int = 640;
+// const window_height: c_int = 320;
+const window_width: c_int = 320;
+const window_height: c_int = 160;
 const num_threads: i32 = 16;
-const num_samples: i32 = 256;
+//const num_samples: i32 = 256;
+const num_samples: i32 = 128;
 const max_depth: i32 = 16;
 
 // For some reason, this isn't parsed automatically. According to SDL docs, the
@@ -277,27 +280,27 @@ pub fn main() !void {
         //do this in the simpler way (below) to workaround 
         //an apparent bug in the current version of the compiler (Aug. 2019 version)
 
-        // const chunk_size = blk: {
-        //     const num_pixels = window_width * window_height;
-        //     const n = num_pixels / num_threads;
-        //     const rem = num_pixels % num_threads;
-        //     if (rem > 0) {
-        //         break :blk n + 1;
-        //     } else {
-        //         break :blk n;
-        //     }
-        // };
+        const chunk_size = blk: {
+            const num_pixels = window_width * window_height;
+            const n = num_pixels / num_threads;
+            const rem = num_pixels % num_threads;
+            if (rem > 0) {
+                break :blk n + 1;
+            } else {
+                break :blk n;
+            }
+        };
 
-        const num_pixels = window_width * window_height;
-        const n = num_pixels / num_threads;
-        const rem = num_pixels % num_threads;
-        if (rem > 0) {
-            _chunk_size = n + 1;
-        } else {
-            _chunk_size = n;
-        }
+        // const num_pixels = window_width * window_height;
+        // const n = num_pixels / num_threads;
+        // const rem = num_pixels % num_threads;
+        // if (rem > 0) {
+        //     _chunk_size = n + 1;
+        // } else {
+        //     _chunk_size = n;
+        // }
 
-        const chunk_size = _chunk_size;
+        // const chunk_size = _chunk_size;
 
         var ithread: i32 = 0;
         while (ithread < num_threads) : (ithread += 1) {
@@ -320,14 +323,14 @@ pub fn main() !void {
         while (true){
             var all_done = true;
             for (frames) |frame, j| {
+                var _contexts = contexts;
                 if (!contexts.toSlice()[j].done){
                     all_done = false;
                     const framePtr: anyframe = @ptrCast(anyframe, &frame);
                     resume framePtr;
                 }
                 else {
-                    try stdout.print("Frame {} is finished\n", j);
-                    continue;
+                    try stdout.print("Frame {} is finished\n", j);                    
                 }
             }
             if (all_done){
