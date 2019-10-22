@@ -9,16 +9,16 @@ const Ray = @import("ray.zig").Ray;
 const Vec3f = @import("vector.zig").Vec3f;
 
 pub const HitRecord = struct {
-    pub t: f32,
-    pub p: Vec3f,
-    pub n: Vec3f,
-    pub material: mat.Material
+    t: f32,
+    p: Vec3f,
+    n: Vec3f,
+    material: mat.Material
 };
 
 pub const Sphere = struct {
-    pub center: Vec3f,
-    pub radius: f32,
-    pub material: Material,
+    center: Vec3f,
+    radius: f32,
+    material: Material,
 
     pub fn new(center: Vec3f, radius: f32, material: Material) Sphere {
         return Sphere{
@@ -74,7 +74,7 @@ pub const Sphere = struct {
 };
 
 pub const World = struct {
-    pub spheres: ArrayList(Sphere),
+    spheres: ArrayList(Sphere),
 
     pub fn init() World {
         return World {
