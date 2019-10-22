@@ -23,10 +23,10 @@ const c = @cImport({
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED_MASK    0x1FFF0000u
 const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
 
-// const window_width: c_int = 640;
-// const window_height: c_int = 320;
-const window_width: c_int = 320;
-const window_height: c_int = 160;
+const window_width: c_int = 640;
+const window_height: c_int = 320;
+// const window_width: c_int = 320;
+// const window_height: c_int = 160;
 const num_threads: i32 = 16;
 //const num_samples: i32 = 256;
 const num_samples: i32 = 128;
@@ -184,14 +184,15 @@ pub fn render(context: *ThreadContext) !void {
             }
             color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
             setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
-            if (idx == end_index - 1){
-                context.done = true;
-            }
+        }
+        if (idx == end_index - 1){
+            contexts[@intCast(usize,context.thread_index)].done = true;
+            //try stdout.print("hey pal, at bottom: frame = {}, done flag = {}\n", context.thread_index, context.done);            
         }
     }
 }
 
-var contexts = ArrayList(ThreadContext).init(std.debug.global_allocator);
+var contexts = [_] ThreadContext{undefined} ** num_threads;
 
 
 pub fn main() !void {
@@ -273,12 +274,8 @@ pub fn main() !void {
 
         var tasks = ArrayList(Thread).init(std.debug.global_allocator);
         defer tasks.deinit();
-        defer contexts.deinit();
 
         var _chunk_size: i32 = 0;
-
-        //do this in the simpler way (below) to workaround 
-        //an apparent bug in the current version of the compiler (Aug. 2019 version)
 
         const chunk_size = blk: {
             const num_pixels = window_width * window_height;
@@ -291,20 +288,10 @@ pub fn main() !void {
             }
         };
 
-        // const num_pixels = window_width * window_height;
-        // const n = num_pixels / num_threads;
-        // const rem = num_pixels % num_threads;
-        // if (rem > 0) {
-        //     _chunk_size = n + 1;
-        // } else {
-        //     _chunk_size = n;
-        // }
-
-        // const chunk_size = _chunk_size;
 
         var ithread: i32 = 0;
         while (ithread < num_threads) : (ithread += 1) {
-            try contexts.append(ThreadContext{
+            contexts[@intCast(usize,ithread)] = ThreadContext{
                 .thread_index = ithread,
                 .num_pixels = window_width * window_height,
                 .chunk_size = chunk_size,
@@ -312,8 +299,8 @@ pub fn main() !void {
                 .surface = surface,
                 .world = &world,
                 .camera = &camera,
-            });
-            const frame = async render(&contexts.toSlice()[@intCast(usize, ithread)]);
+            };
+            const frame = async render(&contexts[@intCast(usize, ithread)]);
 
             const ptr: anyframe = @ptrCast(anyframe, &frame);
             frames[@intCast(usize,ithread)] = frame;
@@ -322,18 +309,18 @@ pub fn main() !void {
 
         while (true){
             var all_done = true;
+            
+
             for (frames) |frame, j| {
-                var _contexts = contexts;
-                if (!contexts.toSlice()[j].done){
+                
+                if (!contexts[j].done){
                     all_done = false;
                     const framePtr: anyframe = @ptrCast(anyframe, &frame);
                     resume framePtr;
                 }
-                else {
-                    try stdout.print("Frame {} is finished\n", j);                    
-                }
             }
             if (all_done){
+                try stdout.print("All done.\n");            
                 break;
             }
         }
