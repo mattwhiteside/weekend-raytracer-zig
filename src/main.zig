@@ -1,4 +1,5 @@
 const Camera = @import("camera.zig").Camera;
+const builtin = @import("builtin");
 const hitable = @import("hitable.zig");
 const mat = @import("material.zig");
 const Material = mat.Material;
@@ -9,10 +10,15 @@ const rand = std.rand;
 const Ray = @import("ray.zig").Ray;
 const Vec3f = @import("vector.zig").Vec3f;
 const Thread = std.Thread;
+const mutex = std.Mutex;
+const AtomicOrder = builtin.AtomicOrder;
+const assert = std.debug.assert;
+
 
 const Sphere = hitable.Sphere;
 const World = hitable.World;
-
+var current_pixel:u64 = 0;
+var pixel_lock = if (builtin.single_threaded) {} else u8(0);
 const c = @cImport({
     @cInclude("SDL.h");
 });
@@ -28,8 +34,8 @@ const window_height: c_int = 320;
 // const window_width: c_int = 320;
 // const window_height: c_int = 160;
 const num_threads: i32 = 16;
-//const num_samples: i32 = 256;
-const num_samples: i32 = 128;
+const num_samples: i32 = 256;
+//const num_samples: i32 = 128;
 const max_depth: i32 = 16;
 
 // For some reason, this isn't parsed automatically. According to SDL docs, the
@@ -155,20 +161,20 @@ pub fn render(context: *ThreadContext) !void {
     const start_index = context.thread_index * context.chunk_size;
     const candidate_end_index = start_index + context.chunk_size; 
     var end_index:i32 = 0;
-    if (candidate_end_index <= context.num_pixels) {
-        end_index = candidate_end_index;
-    } else {
-        end_index = context.num_pixels;
-    }
-
+    // if (candidate_end_index <= context.num_pixels) {
+    //     end_index = candidate_end_index;
+    // } else {
+    //     end_index = context.num_pixels;
+    // }
+    end_index = context.num_pixels;
     var idx: i32 = start_index;
-    while (idx < end_index) : (idx += 1) {
-        const w = @mod(idx, window_width);
-        const h = @divTrunc(idx, window_width);
+    while (current_pixel < @intCast(u64, end_index)) : (idx += 0) {
+        const w = @mod(@intCast(i32, current_pixel), window_width);
+        const h = @divTrunc(@intCast(i32, current_pixel), window_width);
         var sample: i32 = 0;
         var color_accum = Vec3f.zero();
         suspend {
-            //try stdout.print("hey pal, at top: frame = {}, idx = {}, sample = {}\n", context.thread_index, idx, sample);
+            //try stdout.print("hey pal, at top: frame = {}, current_pixel = {}, sample = {}\n", context.thread_index, current_pixel, sample);
             while (sample < num_samples) : (sample += 1) {
                 //try stdout.print("hey pal: frame = {}, idx = {}, sample = {}\n", context.thread_index, idx, sample);
                 const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
@@ -184,6 +190,9 @@ pub fn render(context: *ThreadContext) !void {
             }
             color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
             setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
+            while (@atomicRmw(u8, &pixel_lock, builtin.AtomicRmwOp.Xchg, 1, AtomicOrder.SeqCst) != 0) {}
+            defer assert(@atomicRmw(u8, &pixel_lock, builtin.AtomicRmwOp.Xchg, 0, AtomicOrder.SeqCst) == 1);            
+            current_pixel += 1;
         }
         if (idx == end_index - 1){
             contexts[@intCast(usize,context.thread_index)].done = true;
@@ -310,7 +319,9 @@ pub fn main() !void {
         while (true){
             var all_done = true;
             
-
+            if (current_pixel >= @intCast(u64, window_width*window_height)){
+                break;
+            }
             for (frames) |frame, j| {
                 
                 if (!contexts[j].done){
