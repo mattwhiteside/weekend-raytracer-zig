@@ -18,7 +18,7 @@ const assert = std.debug.assert;
 const Sphere = hitable.Sphere;
 const World = hitable.World;
 var current_pixel:u64 = 0;
-var pixel_lock = if (builtin.single_threaded) {} else u8(0);
+var pixel_lock = if (builtin.single_threaded) {} else @as(u8,0);
 const c = @cImport({
     @cInclude("SDL.h");
 });
@@ -147,9 +147,9 @@ const ThreadContext = struct {
 
 var frames = [_] @Frame(render){undefined} ** num_threads;
 
-pub fn render(context: *ThreadContext) !void {
+pub fn render(context: *ThreadContext) void {
 
-    const stdout_file = try std.io.getStdOut();
+    const stdout_file = std.io.getStdOut();
 
     // Get the `FileOutStream` corresponding to stdout.
     var stdout_stream = stdout_file.outStream();
@@ -206,7 +206,7 @@ var contexts = [_] ThreadContext{undefined} ** num_threads;
 
 pub fn main() !void {
 
-    const stdout_file = try std.io.getStdOut();
+    const stdout_file = std.io.getStdOut();
 
     // Get the `FileOutStream` corresponding to stdout.
     var stdout_stream = stdout_file.outStream();
