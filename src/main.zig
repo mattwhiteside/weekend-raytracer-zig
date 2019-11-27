@@ -5,23 +5,16 @@ const mat = @import("material.zig");
 const Material = mat.Material;
 const std = @import("std");
 const os = std.os;
-const ArrayList = std.ArrayList;
 const rand = std.rand;
 const Ray = @import("ray.zig").Ray;
 const Vec3f = @import("vector.zig").Vec3f;
-const Thread = std.Thread;
-const mutex = std.Mutex;
-const AtomicOrder = builtin.AtomicOrder;
-const assert = std.debug.assert;
-
-
 const Sphere = hitable.Sphere;
 const World = hitable.World;
-var current_pixel:u64 = 0;
-var pixel_lock = if (builtin.single_threaded) {} else @as(u8,0);
 const c = @cImport({
     @cInclude("SDL.h");
 });
+
+pub const io_mode = .evented;
 
 // See https://github.com/zig-lang/zig/issues/565
 // SDL_video.h:#define SDL_WINDOWPOS_UNDEFINED         SDL_WINDOWPOS_UNDEFINED_DISPLAY(0)
@@ -31,11 +24,9 @@ const SDL_WINDOWPOS_UNDEFINED = @bitCast(c_int, c.SDL_WINDOWPOS_UNDEFINED_MASK);
 
 const window_width: c_int = 640;
 const window_height: c_int = 320;
-// const window_width: c_int = 320;
-// const window_height: c_int = 160;
-const num_threads: i32 = 16;
+
+const num_threads: i32 = 1;
 const num_samples: i32 = 256;
-//const num_samples: i32 = 128;
 const max_depth: i32 = 16;
 
 // For some reason, this isn't parsed automatically. According to SDL docs, the
@@ -145,9 +136,8 @@ const ThreadContext = struct {
     done: bool = false
 };
 
-var frames = [_] @Frame(render){undefined} ** num_threads;
-
-pub fn render(context: *ThreadContext) void {
+const allocator = std.heap.c_allocator;
+pub fn render(context: *ThreadContext) anyerror!void {
 
     const stdout_file = std.io.getStdOut();
 
@@ -159,46 +149,43 @@ pub fn render(context: *ThreadContext) void {
     var stdout = &stdout_stream.stream;
 
     const start_index = context.thread_index * context.chunk_size;
-    const candidate_end_index = start_index + context.chunk_size; 
-    var end_index:i32 = 0;
-    // if (candidate_end_index <= context.num_pixels) {
-    //     end_index = candidate_end_index;
-    // } else {
-    //     end_index = context.num_pixels;
-    // }
-    end_index = context.num_pixels;
+    var end_index = context.num_pixels;
     var idx: i32 = start_index;
-    while (current_pixel < @intCast(u64, end_index)) : (idx += 0) {
-        const w = @mod(@intCast(i32, current_pixel), window_width);
-        const h = @divTrunc(@intCast(i32, current_pixel), window_width);
-        var sample: i32 = 0;
-        var color_accum = Vec3f.zero();
-        suspend {
-            //try stdout.print("hey pal, at top: frame = {}, current_pixel = {}, sample = {}\n", context.thread_index, current_pixel, sample);
-            while (sample < num_samples) : (sample += 1) {
-                //try stdout.print("hey pal: frame = {}, idx = {}, sample = {}\n", context.thread_index, idx, sample);
-                const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
-                const u = (@intToFloat(f32, w) + context.rng.random.float(f32)) / @intToFloat(f32, window_width);
+    while (idx < end_index) : (idx += 1) {
+        const w = @mod(@intCast(i32, idx), window_width);
+        const h = @divTrunc(@intCast(i32, idx), window_width);
 
-                const r = context.camera.makeRay(&context.rng.random, u, v);
-                const color_sample = color(r, context.world, &context.rng.random, 0);
-                // const color_sample = colorScattering(r, &world, &prng.random);
-                // const color_sample = colorDepth(r, &world, &prng.random);
-                // const color_sample = colorNormal(r, &world);
-                // const color_sample = colorAlbedo(r, &world);
-                color_accum = color_accum.add(color_sample);
-            }
-            color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
-            setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * color_accum.x), @floatToInt(u32, 255.99 * color_accum.y), @floatToInt(u32, 255.99 * color_accum.z)));
-            while (@atomicRmw(u8, &pixel_lock, builtin.AtomicRmwOp.Xchg, 1, AtomicOrder.SeqCst) != 0) {}
-            defer assert(@atomicRmw(u8, &pixel_lock, builtin.AtomicRmwOp.Xchg, 0, AtomicOrder.SeqCst) == 1);            
-            current_pixel += 1;
-        }
-        if (idx == end_index - 1){
-            contexts[@intCast(usize,context.thread_index)].done = true;
-            //try stdout.print("hey pal, at bottom: frame = {}, done flag = {}\n", context.thread_index, context.done);            
-        }
+        //try stdout.print("hey pal: pixel = {}\n", idx);
+
+        std.event.Loop.startCpuBoundOperation();
+
+        const frame = try allocator.create(@Frame(colorPixel));
+        frame.* = async colorPixel(context, w, h);
+        defer allocator.destroy(frame);
+
+        var pixelColor = await frame;
+        setPixel(context.surface, w, window_height - h - 1, toBgra(@floatToInt(u32, 255.99 * pixelColor.x), @floatToInt(u32, 255.99 * pixelColor.y), @floatToInt(u32, 255.99 * pixelColor.z)));
     }
+}
+
+fn colorPixel(context: *ThreadContext, w: i32, h: i32) Vec3f {
+    var color_accum = Vec3f.zero();
+    var sample: i32 = 0;
+
+    while (sample < num_samples) : (sample += 1) {
+        const v = (@intToFloat(f32, h) + context.rng.random.float(f32)) / @intToFloat(f32, window_height);
+        const u = (@intToFloat(f32, w) + context.rng.random.float(f32)) / @intToFloat(f32, window_width);
+
+        const r = context.camera.makeRay(&context.rng.random, u, v);
+        // const color_sample = colorScattering(r, &world, &prng.random);
+        // const color_sample = colorDepth(r, &world, &prng.random);
+        // const color_sample = colorNormal(r, &world);
+        // const color_sample = colorAlbedo(r, &world);
+        var sample_color = color(r, context.world, &context.rng.random, 0);
+        color_accum = color_accum.add(sample_color);
+    }
+    color_accum = color_accum.mul(1.0 / @intToFloat(f32, num_samples));
+    return color_accum;
 }
 
 var contexts = [_] ThreadContext{undefined} ** num_threads;
@@ -216,19 +203,19 @@ pub fn main() !void {
     var stdout = &stdout_stream.stream;
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
-        c.SDL_Log(c"Unable to initialize SDL: %s", c.SDL_GetError());
+        c.SDL_Log("Unable to initialize SDL: %s", c.SDL_GetError());
         return error.SDLInitializationFailed;
     }
     defer c.SDL_Quit();
 
-    const window = c.SDL_CreateWindow(c"weekend raytracer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height, c.SDL_WINDOW_OPENGL) orelse {
-        c.SDL_Log(c"Unable to create window: %s", c.SDL_GetError());
+    const window = c.SDL_CreateWindow("weekend raytracer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height, c.SDL_WINDOW_OPENGL) orelse {
+        c.SDL_Log("Unable to create window: %s", c.SDL_GetError());
         return error.SDLInitializationFailed;
     };
     defer c.SDL_DestroyWindow(window);
 
     const surface = SDL_GetWindowSurface(window) orelse {
-        c.SDL_Log(c"Unable to get window surface: %s", c.SDL_GetError());
+        c.SDL_Log("Unable to get window surface: %s", c.SDL_GetError());
         return error.SDLInitializationFailed;
     };
 
@@ -281,9 +268,6 @@ pub fn main() !void {
     {
         _ = c.SDL_LockSurface(surface);
 
-        var tasks = ArrayList(Thread).init(std.debug.global_allocator);
-        defer tasks.deinit();
-
         var _chunk_size: i32 = 0;
 
         const chunk_size = blk: {
@@ -297,50 +281,22 @@ pub fn main() !void {
             }
         };
 
+        var context = ThreadContext{
+            .thread_index = 0,
+            .num_pixels = window_width * window_height,
+            .chunk_size = chunk_size,
+            .rng = rand.DefaultPrng.init(@intCast(u64, 0)),
+            .surface = surface,
+            .world = &world,
+            .camera = &camera,
+        };
 
-        var ithread: i32 = 0;
-        while (ithread < num_threads) : (ithread += 1) {
-            contexts[@intCast(usize,ithread)] = ThreadContext{
-                .thread_index = ithread,
-                .num_pixels = window_width * window_height,
-                .chunk_size = chunk_size,
-                .rng = rand.DefaultPrng.init(@intCast(u64, ithread)),
-                .surface = surface,
-                .world = &world,
-                .camera = &camera,
-            };
-            const frame = async render(&contexts[@intCast(usize, ithread)]);
-
-            const ptr: anyframe = @ptrCast(anyframe, &frame);
-            frames[@intCast(usize,ithread)] = frame;
-        }
-
-
-        while (true){
-            var all_done = true;
-            
-            if (current_pixel >= @intCast(u64, window_width*window_height)){
-                break;
-            }
-            for (frames) |frame, j| {
-                
-                if (!contexts[j].done){
-                    all_done = false;
-                    const framePtr: anyframe = @ptrCast(anyframe, &frame);
-                    resume framePtr;
-                }
-            }
-            if (all_done){
-                try stdout.print("All done.\n");            
-                break;
-            }
-        }
-
+        try render(&context);
         c.SDL_UnlockSurface(surface);
     }
 
     if (c.SDL_UpdateWindowSurface(window) != 0) {
-        c.SDL_Log(c"Error updating window surface: %s", c.SDL_GetError());
+        c.SDL_Log("Error updating window surface: %s", c.SDL_GetError());
         return error.SDLUpdateWindowFailed;
     }
 
